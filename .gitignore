@@ -12,6 +12,3 @@ logs/llm_debug.log
 
 # Local
 *.local
-
-# Knowledge base (教材数据)
-knowledge_base/
