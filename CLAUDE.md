@@ -1,7 +1,3 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## 项目概述
 
 AI 知识库问答代理，兼容 `tk.enncy.cn` API 格式。本地运行，调用 AI 生成答案而非查询数据库。
