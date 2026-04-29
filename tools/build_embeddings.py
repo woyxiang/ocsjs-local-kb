@@ -89,9 +89,18 @@ def build_cache(md_path: Path, client, model):
     text = md_path.read_text(encoding="utf-8")
     sections = parse_md(text)
 
+    # 检查现有缓存（优先 npz）
+    npz_path = md_path.with_suffix(md_path.suffix + ".embeddings.npz")
+    if npz_path.exists():
+        try:
+            import numpy as np
+            data = np.load(npz_path)
+            if str(data["model"]) == model and str(data["content_hash"]) == content_hash(sections):
+                print(f"  跳过 (缓存有效): {md_path.name}")
+                return
+        except Exception:
+            pass
     cache_path = md_path.with_suffix(md_path.suffix + ".embeddings.json")
-
-    # 检查现有缓存
     if cache_path.exists():
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -109,7 +118,7 @@ def build_cache(md_path: Path, client, model):
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
         try:
-            resp = client.embeddings.create(model=model, input=batch)
+            resp = client.embeddings.create(model=model, input=batch, timeout=120.0)
             embeddings.extend([item.embedding for item in resp.data])
             print(f"  批次 {i // batch_size + 1}/{(len(texts) + batch_size - 1) // batch_size} 完成")
         except Exception as e:
@@ -118,16 +127,29 @@ def build_cache(md_path: Path, client, model):
             embeddings.extend([[0.0] * dim] * len(batch))
         time.sleep(0.1)
 
-    # 保存
-    cache_path.write_text(
-        json.dumps({
-            "model": model,
-            "content_hash": content_hash(sections),
-            "embeddings": embeddings,
-        }, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    print(f"  已保存: {cache_path.name} ({len(embeddings)} 个章节)")
+    # 保存 (npz 压缩格式)
+    npz_path = md_path.with_suffix(md_path.suffix + ".embeddings.npz")
+    try:
+        import numpy as np
+        arr = np.array(embeddings, dtype=np.float32)
+        np.savez_compressed(
+            npz_path,
+            model=model,
+            content_hash=content_hash(sections),
+            **{f"emb_{i}": arr[i] for i in range(len(embeddings))},
+        )
+        print(f"  已保存: {npz_path.name} ({len(embeddings)} 个章节, npz 压缩)")
+    except Exception as e:
+        print(f"  npz 保存失败: {e}，fallback json")
+        cache_path.write_text(
+            json.dumps({
+                "model": model,
+                "content_hash": content_hash(sections),
+                "embeddings": embeddings,
+            }, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"  已保存: {cache_path.name} ({len(embeddings)} 个章节, json)")
 
 
 def main():

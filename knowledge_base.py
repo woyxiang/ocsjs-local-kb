@@ -223,6 +223,7 @@ class KnowledgeBase:
                 resp = self._emb_client.embeddings.create(
                     model=self._emb_model,
                     input=batch,
+                    timeout=120.0,
                 )
                 embeddings.extend([item.embedding for item in resp.data])
             except Exception as e:
@@ -246,9 +247,20 @@ class KnowledgeBase:
         return h.hexdigest()
 
     def _load_embedding_cache(self, cache_path: Path) -> tuple[str, str, list[list[float]]] | None:
-        """尝试加载缓存。返回 (model, content_hash, embeddings) 或 None。"""
+        """尝试加载缓存。优先 npz 压缩格式，fallback 到 json。"""
         if not cache_path.exists():
             return None
+        # 尝试 npz 压缩格式
+        npz_path = cache_path.with_suffix(".embeddings.npz")
+        if npz_path.exists():
+            try:
+                import numpy as np
+                data = np.load(npz_path)
+                embeddings = [data[f"emb_{i}"].tolist() for i in range(len(data.files))]
+                return str(data["model"]), str(data["content_hash"]), embeddings
+            except Exception:
+                pass
+        # fallback json 格式
         try:
             import json
             data = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -257,20 +269,34 @@ class KnowledgeBase:
             return None
 
     def _save_embedding_cache(self, cache_path: Path, embeddings: list[list[float]]) -> None:
-        """保存 embeddings 到缓存文件。"""
+        """保存 embeddings 到缓存文件（npz 压缩格式）。"""
         try:
-            import json
-            cache_path.write_text(
-                json.dumps({
-                    "model": self._emb_model,
-                    "content_hash": self._content_hash(),
-                    "embeddings": embeddings,
-                }, ensure_ascii=False),
-                encoding="utf-8",
+            import numpy as np
+            npz_path = cache_path.with_suffix(".embeddings.npz")
+            arr = np.array(embeddings, dtype=np.float32)
+            np.savez_compressed(
+                npz_path,
+                model=self._emb_model,
+                content_hash=self._content_hash(),
+                **{f"emb_{i}": arr[i] for i in range(len(embeddings))},
             )
-            print(f"[KB] embedding 缓存已保存 ({len(embeddings)} 个章节)")
+            print(f"[KB] embedding 缓存已保存 ({len(embeddings)} 个章节, npz 压缩)")
         except Exception as e:
-            print(f"[KB] embedding 缓存保存失败: {e}")
+            print(f"[KB] embedding 缓存保存失败 (npz): {e}")
+            # fallback json 格式
+            try:
+                import json
+                cache_path.write_text(
+                    json.dumps({
+                        "model": self._emb_model,
+                        "content_hash": self._content_hash(),
+                        "embeddings": embeddings,
+                    }, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print(f"[KB] embedding 缓存已保存 ({len(embeddings)} 个章节, json fallback)")
+            except Exception as e2:
+                print(f"[KB] embedding 缓存保存失败 (json): {e2}")
 
     def _search_by_embedding(self, query: str, top_k: int) -> list[tuple[int, float]]:
         """纯 embedding 语义搜索。"""
@@ -283,6 +309,7 @@ class KnowledgeBase:
             resp = self._emb_client.embeddings.create(
                 model=self._emb_model,
                 input=[query],
+                timeout=60.0,
             )
             q_emb = resp.data[0].embedding
         except Exception:
