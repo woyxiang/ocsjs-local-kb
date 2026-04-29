@@ -12,3 +12,5 @@ logs/llm_debug.log
 
 # Local
 *.local
+
+settings*json*
